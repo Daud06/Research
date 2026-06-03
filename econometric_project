@@ -1,0 +1,232 @@
+#install.packages("openxlsx")
+#install.packages("dplyr")
+#install.packages("plm")
+#install.packages("AER")  # если ещё не установлен
+#install.packages("xtable")
+#install.packages("stargazer")
+#install.packages('gt')
+#install.packages("modelsummary")
+#install.packages('psych')
+#install.packages('corr')
+
+
+#библиотеки
+library(dplyr)
+library(gt)
+library(fixest)
+library(openxlsx)
+library(tinytable)
+library(plm)
+library(readr)
+library(AER)
+library(psych)
+library(tableone)
+library(stats)
+library("MatchIt")
+library(modelsummary)
+library(car)
+library(haven)
+library(xtable)
+library(sandwich)
+#library(corrr)
+library('stargazer')
+
+#Чтение и обработка данных
+file_path <- "final_dataset.csv"
+data <- read.csv(file_path)  # Чтение с первого листа
+data <- subset(data, Year != 2023 & Year != 2024)
+
+#data['BT_after_year']
+
+data$ROE <- parse_number(as.character(data$ROE), locale = locale(decimal_mark = ","))
+data$Income <- parse_number(as.character(data$Income), locale = locale(decimal_mark = ","))
+data$staff <- parse_number(as.character(data$staff), locale = locale(decimal_mark = ","))
+data$Assets <- parse_number(as.character(data$Assets), locale = locale(decimal_mark = ","))
+data$Equity <- parse_number(as.character(data$Equity), locale = locale(decimal_mark = ","))
+data$Profit <- parse_number(as.character(data$Profit), locale = locale(decimal_mark = ","))
+
+print(data)
+
+hist(data$ROE)
+
+distinct(data['code'])
+
+#data[,c('code', 'Equity', 'BT')]%>%filter(Equity < 0)
+
+hist(data$ROE)
+
+data <- data %>%
+  group_by(code) %>%
+  filter(n_distinct(Year) != 1) %>%
+  ungroup()
+
+distinct(data['code'])
+#data[, c('code', 'Year', 'ROE', 'ROE_change')] %>% filter(ROE_change != 0)
+#data
+
+dataset <- data[, c("Companie_name", 'Profit', 'Category','BT_after_year', 'Equity', "code", 'Year',"staff", "ROE", "Assets", "BT", "Income")]
+summary(dataset)
+
+#Запоняем пропуски в стафф и ROE
+
+data_clean <- dataset %>%
+  group_by(code) %>%
+  filter(!any(is.na(ROE) | is.na(staff) | is.na(Profit) | is.na(Income) | is.na(Equity) )) %>%
+  ungroup()
+
+data_clean[apply(data_clean, 1, function(x) any(is.na(x))),]
+
+data_clean$log_assets = log(data_clean$Assets)
+data_clean$log_income = log(data_clean$Income)
+#data$log_profit = data$Profit
+data_clean$log_staff = log(data_clean$staff)
+data_clean$ROE = data_clean$ROE / 100
+data_clean$leverage = (data_clean$Assets - data_clean$Equity) / data_clean$Assets
+
+q1 = quantile(data_clean$ROE, 0.01, na.rm = TRUE)
+q99 = quantile(data_clean$ROE, 0.99, na.rm = TRUE)
+
+data_clean <- data_clean %>%
+  group_by(code) %>%
+  filter(!any(ROE < q1 | ROE > q99)) %>%
+  ungroup()
+
+count(distinct(data_clean['code']))
+hist(data_clean$ROE)
+
+#summary(data_clean$ROA)
+#cor(data_clean)
+
+data_clean$A_turnover = data_clean$Income / data_clean$Assets
+data_clean$ROA = data_clean$Profit / data_clean$Assets
+data_clean$log_aturnover <- log(data_clean$A_turnover)
+#data_clean$log_equity <- log(data_clean$Equity)
+
+
+#data_for_roech <- data_clean %>% filter(ROE_change != 0)
+#data_for_roech
+
+#data_clean <- data_clean %>% group_by(code) %>% filter(!any(ROA < -0.5)) %>% ungroup()
+# Просмотр первых строк данных
+head(data_clean)
+
+
+#data_clean %>% group_by(code) %>% summarise(countd = n_distinct(Year)) %>% filter(countd < 2)
+
+distinct(data_clean['code'])
+
+summary(data_clean$ROA)
+hist(data_clean$ROA)
+hist(data_clean$ROE)
+
+#write.xlsx(data_clean,'Ready_to_analys.xlsx', sheetName = "Sheet1")
+#write_dta(data_clean, 'filled_data.dta')
+
+
+vars <- c("BT", "ROE", "A_turnover", "Assets", "Equity", 
+          "staff", "Income", "Profit", "ROA", "leverage")
+
+
+#матрица корреляций
+cor(data_clean[vars], use = "complete.obs", method = "pearson")
+
+#простая регрессионная модель
+# model <- lm(ROA ~ netassetps + Cash + Size + User + Age, data = data)
+model <- lm(ROE ~ log_assets + BT + log_staff + log_income  + leverage, data = data_clean)
+summary(model)
+
+vif(model)
+
+bptest(model)
+coeftest(model, vcov = vcovHC(model, type = "HC1"))
+
+#тест Хаусмана
+
+pdata <- pdata.frame(data_clean, index = c("code", "Year"))
+pdata
+
+model_fe <- plm(A_turnover ~ log_assets + log_income + log_staff  + leverage + BT, data = pdata, model = "within")
+model_re <- plm(A_turnover ~ log_assets + log_income + log_staff  + leverage + BT, data = pdata, model = "random")
+
+phtest(model_fe, model_re)
+
+#Ftest на наличие фикс эффектов
+model_pool <- plm(ROE ~ log_assets + BT + log_staff + log_income + leverage + factor(Year), data = pdata, model = "pooling")
+model_fe <- plm(ROE ~ log_assets + BT + log_staff   + log_income + leverage + factor(Year), data = pdata, model = "within")
+
+pFtest(model_fe, model_pool)
+
+#Рассчитаем модели
+model_roa_pool <- plm(ROA ~ log_assets + BT + log_staff + log_income + leverage + factor(Year), data = pdata, model = "pooling")
+model_atov_pool <- plm(A_turnover ~ Equity + BT + log_staff + log_income + leverage + factor(Year), data = pdata, model = "pooling")
+model_roe_pool <-  plm(ROE ~ log_assets + BT + log_staff + log_income + leverage + factor(Year), data = pdata, model = "pooling")
+
+
+model_roa <- feols(ROA ~ log_assets + BT + log_staff + log_income + leverage| code + Year, data = data_clean, vcov = "HC1")
+model_atov <- feols(A_turnover ~ Equity + BT + log_staff + log_income + leverage | code + Year, data = data_clean, vcov = "HC1")
+model_roe <- feols(ROE ~ log_assets + BT + log_staff + log_income + leverage | code + Year, data = data_clean, vcov = "HC1")
+
+#bptest(model_roa)
+summary(model_roe)
+summary(model_roa)
+summary(model_atov)
+
+#resettest(model_feols)
+
+model_roa_avg <- feols(ROA ~ log_assets + BT_after_year + log_staff + log_income  + leverage | code + Year, data = pdata, vcov = "HC1")
+model_atov_avg <- feols(log_aturnover ~ BT_after_year + log_staff + log_income + leverage | code + Year, data = pdata, vcov = "HC1")
+model_roe_avg <- feols(ROE ~ log_assets + BT_after_year + log_staff + log_income + leverage| code + Year, data = pdata, vcov = "HC1")
+
+#model_roech_avg <- feols(ROE_change ~ Assets + BT_after_year + staff + Profit  + leverage + BT_after_year:factor(Category)| code + Year, data = data_for_roech, vcov = "HC1")
+
+summary(model_roe_avg)
+summary(model_roa_avg)
+summary(model_atov_avg)
+
+models_pool <- list(
+  "ROA" = model_roa_pool,
+  "ROE" = model_roe_pool,
+  "ATurnover" = model_atov_pool
+)
+
+models <- list(
+  "ROA" = model_roa,
+  "ROE" = model_roe,
+  "ATurnover" = model_atov
+)
+
+models_avg <- list(
+  "ROA" = model_roa_avg,
+  "ROE" = model_roe_avg,
+  "ATurnover" = model_atov_avg
+)
+
+modelsummary(models_pool,
+             statistic = "std.error",#можно заменить на "p.value" или t-statistic
+             #vcovHC = ~ HC1,         
+             stars = TRUE,
+             output = "gt",#вывод через gt
+             title = "Сравнение моделей (с робастными ошибками)",
+             coef_omit = "Intercept"
+             #gof_omit = "Log|AIC|BIC"
+)
+
+modelsummary(models,
+             statistic = "std.error",
+             #vcovHC = ~ HC1,           
+             stars = TRUE,
+             output = "short_run_fe_models.xlsx",           
+             title = "Сравнение моделей (с робастными ошибками)",
+             coef_omit = "Intercept"
+             #gof_omit = "Log|AIC|BIC"
+) 
+
+modelsummary(models_avg,
+             statistic = "std.error", #можно заменить на "p.value" или t-statistic
+             #vcovHC = ~ HC1,             
+             stars = TRUE,
+             output = "gt",            
+             title = "Сравнение моделей (с робастными ошибками)",
+             coef_omit = "Intercept"
+             #gof_omit = "Log|AIC|BIC"
+)
