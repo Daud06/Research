@@ -1,3 +1,5 @@
+#Ссылка на данные - https://docs.google.com/spreadsheets/d/1Fh4LN1W5W2nC0oIAv-7T4sio13A68K5ClIn-UD3n_ho/edit?gid=752198141#gid=752198141
+
 #install.packages("openxlsx")
 #install.packages("dplyr")
 #install.packages("plm")
